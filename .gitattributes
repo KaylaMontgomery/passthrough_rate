@@ -5,7 +5,7 @@
 *.rds       binary
 *.Rd        text
 *.Rdx       binary
-*.Rmd		text
+*.Rmd		linguist-vendored=false
 *.R  		text
 # Ignore
 *.html linguist-vendored
