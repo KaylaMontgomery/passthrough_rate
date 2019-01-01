@@ -1,0 +1,119 @@
+---
+title: "What website pages drive internal traffic?"
+author: "Kayla N. Montgomery"
+date: "December 8, 2018"
+output: html_document
+---
+
+```{r setup, include=FALSE, echo=FALSE, message=FALSE, warning=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+packages <- c('dplyr', 'data.table', "R.utils", "scales", "magrittr", "ggplot2", "DT", "stringr")
+lapply(packages, library, character.only = TRUE)
+```
+
+## Context
+
+This was a time-limited exercise with only 2-3 hours allocated for analysis. The client, a major news and cultural website, provided a site-wide user traffic breakdown consisting of two millions records with seven fields: visitor, visit date, visit hour, anonymized page URL, site section, publication date, and publication hour. Pages are mostly articles - long-form analysis and  commentary. I chose to investigate <span style="color:red">passthrough target rate</span>, the percentage of individual pages' views that come from internal links. Passthrough target rate is expressed as a ratio to allow an analyst to compare pages with different view counts.
+
+## Passthrough target investigation
+
+Passthrough target rate is distinct from the more familiar concept of clickthrough rate, and is a metric of user retention. Pages that users *click through to* after initially entering the site to view another page are significant because they appear interesting enough to retain readers on the site. Because the data does not include the source of a page visit, I had to infer it from user behavior. 
+
+It is impossible to fully infer passthroughs from unordered data at the hour level (like this) because when two page visits occur within the same date-hour pair there is no way to determine which of the pair was viewed first. To infer direction, we can only trust cross-hour differences. I treat any page visit as a passthrough only if the user viewed another page on the site between 1 & 2 hours prior. This limitation wouldn't exist in data with exact timestamps (or better, logs showing the originating page.)
+
+##Load data and append POSIX fields
+
+I will be performing a window function on the data and POSIX date-time fields are significantly easier to work with than multiple split date-hour fields.
+
+```{r data, warning=FALSE}
+traffic <- fread('analyst_hw.tsv')
+
+#  Add two columns for date-time. One is page/article publication date and one is visit date.
+traffic %<>%
+  mutate(visit_POSIX = paste0(visit_date, "-", visit_hour),
+         publication_POSIX = paste0(publication_date, "-", publication_hour)) %>% 
+  mutate_at(vars(visit_POSIX, publication_POSIX),
+            funs(as.POSIXct(., tz = "GMT", "%Y-%m-%d-%H"))) 
+```
+
+## "Passthrough target rate" preliminary analysis
+
+Passthrough is only of interest for pages with a meaningful number of views. To start, I investigate the distribution of site views to estimate an appropriate cutoff.
+
+```{r prelim, message=FALSE}
+views <- traffic %>% # 
+  group_by(site_section, url_id) %>% 
+  summarize(total_views = n()) %>% 
+  ungroup 
+
+views$total_views %>% quantile
+# Note that most pages have only one view.
+
+views$total_views %>% qplot() + xlab("views") + ylab('page count') + scale_x_log10(labels = comma) + ggtitle("page views - Q-Q plot")
+# The data is too skewed to visualize with a histogram. This is a q-q plot, which is like a histogram with logarithmic binning.
+
+```
+
+The distribution of pageviews is highly skewed, with the vast majority of pages only visited once by any user. A q-q chart will provide a better visualization than a histogram. I selected 100 views as a threshold for pages; for a major media website, pages with low view counts are not meaningful from a passthrough perspective.
+
+```{r post_analysis_filter, echo=FALSE}
+views_100_plus <- views %>% 
+  filter(total_views > 100) 
+```
+
+## Calculate passthrough counts for pages
+
+```{r passthrough_count}
+
+# Calculate cross-hour page passthrough COUNTS. These are records where the user
+# viewed another Atlantic.com page within 1-2 hours prior to visiting the
+# current page, and we assume that they clicked through from it.
+
+passthroughs <- traffic %>% 
+  group_by(visitor_id) %>%
+  mutate(timediff = difftime(visit_POSIX,
+                             lag(visit_POSIX, order_by = visit_POSIX),   
+                             units = 'hours')) %>% 
+  # time differences other than 1 are either too large to infer passthrough or
+  # are zero and direction cannot be inferred
+  filter(timediff == 1) %>%
+  # if the previous url is the same as the current one, it's a user page refresh
+  # and should not be treated as a passthrough
+  filter(url_id != lag(url_id)) %>% 
+  ungroup
+
+total_passthroughs <- passthroughs %>%
+  group_by(site_section, url_id) %>%
+  summarize(total_passthroughs = n()) %>%
+  ungroup
+```
+
+## Top pages by passthrough target rate for each site section
+
+```{r graphs, fig.height=35}
+views_100_plus %>% 
+  left_join(total_passthroughs, by = c('site_section', 'url_id')) %>% 
+  mutate(passthrough_ratio = total_passthroughs / total_views) %>% 
+  group_by(site_section) %>% # 
+  filter(passthrough_ratio > 0) %T>%
+  # exclude all site sections with a single page, since graphs would not be meaningful.
+  (function(x)(singletons <<- x %>% summarize(count = n_distinct(url_id)) %>% filter(count == 1) %>% select(site_section) %>% pull)) %>%
+  filter(!(site_section %in% singletons)) %>%
+  top_n(5, passthrough_ratio) %>%
+  arrange(passthrough_ratio) %>%
+  ggplot(aes(x = url_id, y = passthrough_ratio)) + geom_col() + facet_wrap(~ site_section, ncol = 3, scales = "free_x") + theme(strip.text = element_text(size = 12), strip.text.x = element_text(size = 8), axis.text.x = element_text(angle = 75, hjust = 1)) 
+```
+
+## User email addresses stored in the site sections
+
+A final, unrelated note, some users' email addresses seem to be stored in cleartext within the website! This is not good practice because the site is likely to be crawled and harvested by spammers.
+
+```{r analyze}
+traffic %>% 
+  filter(grepl("@", site_section)) %>%
+  mutate(email_address = str_extract(site_section, "(?<==).+(?=&r)")) %>%
+  filter(nchar(email_address) > 1) %>%
+  distinct(email_address) %>% 
+  arrange(email_address) %>% 
+  datatable
+```
