@@ -12,5 +12,5 @@ analysis. Users will not be able to knit the .RMD file without this dataset,
 so a fully-knit .html document of the final output is included. Page URLs are
 anonymized.
 
-I implemented this project in dplyr as I was learning to use the tidyverse
+I did this project with dplyr syntax, as I was learning to use the tidyverse
 at the time. I prefer to use data.table syntax. 
