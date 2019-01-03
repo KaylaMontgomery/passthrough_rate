@@ -108,12 +108,14 @@ views_100_plus %>%
 
 A final, unrelated note, some users' email addresses seem to be stored in cleartext within the website! This is not good practice because the site is likely to be crawled and harvested by spammers.
 
-```{r analyze}
-traffic %>% 
+```{r emails}
+emails <- traffic %>% 
   filter(grepl("@", site_section)) %>%
   mutate(email_address = str_extract(site_section, "(?<==).+(?=&r)")) %>%
   filter(nchar(email_address) > 1) %>%
   distinct(email_address) %>% 
   arrange(email_address) %>% 
   datatable
+
+emails
 ```
